@@ -1,6 +1,6 @@
 author: jhnnsrs
 entrypoint: app
-identifier: imstich
+identifier: imstorm
 scopes:
 - read
 version: 0.0.1

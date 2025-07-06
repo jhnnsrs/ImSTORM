@@ -5,15 +5,12 @@ STORM simulation, localization & Arkitekt datasource/service
 
 from __future__ import annotations
 
-import argparse
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Generator, List
 
 import numpy as np
-import tifffile as tif
 import xarray as xr
 
 # ───────────────────────── Arkitekt & Mikro ──────────────────────────
@@ -22,6 +19,7 @@ from mikro_next.api.schema import (
     Image,
     from_array_like,
     create_stage,
+    PartialRGBViewInput,
     PartialAffineTransformationViewInput,
     ColorMap,
 )
@@ -44,17 +42,20 @@ ROI_SIZE: int = 13
 # -----------------------------------------------------------------------------
 # Arkitekt service setup
 # -----------------------------------------------------------------------------
-app = easy("STORM_Reconstruction_Service")
+
 
 _pre_filter = BandpassFilter()
 _peak_detector = CV_BlobDetector()
 
 # ───────────────────────── helper functions ───────────────────────────
 
-def _gaussian_spot(shape: tuple[int, int], y0: float, x0: float, sigma: float, amp: float):
+
+def _gaussian_spot(
+    shape: tuple[int, int], y0: float, x0: float, sigma: float, amp: float
+):
     y = np.arange(shape[0])[:, None]
     x = np.arange(shape[1])[None, :]
-    return amp * np.exp(-((y - y0) ** 2 + (x - x0) ** 2) / (2 * sigma ** 2))
+    return amp * np.exp(-((y - y0) ** 2 + (x - x0) ** 2) / (2 * sigma**2))
 
 
 def _simulate_frame(shape: tuple[int, int], n_spots: int) -> np.ndarray:
@@ -68,9 +69,11 @@ def _simulate_frame(shape: tuple[int, int], n_spots: int) -> np.ndarray:
     return np.random.poisson(np.clip(frame, 0, None)).astype(np.float32)
 
 
-def _localize(frame: np.ndarray, rel_threshold: float, roi_size: int, psf_sigma: float = 1.5):
+def _localize(
+    frame: np.ndarray, rel_threshold: float, roi_size: int, psf_sigma: float = 1.5
+):
     """Return localization binary image and parameter array using MicroEye (if available)."""
-    
+
     _, params, *_ = localize_frame(
         0,
         frame,
@@ -94,8 +97,9 @@ def _localize(frame: np.ndarray, rel_threshold: float, roi_size: int, psf_sigma:
 
 # ─────────────────────────── Arkitekt endpoints ───────────────────────
 
+
 @register
-def storm_frames(n_frames: int = N_FRAMES):
+def storm_frames(n_frames: int = N_FRAMES) -> Generator[Image, None, None]:
     """Stream simulated STORM frames as Mikro images via Arkitekt."""
     for i in range(n_frames):
         frame = _simulate_frame(FRAME_SHAPE, np.random.randint(*SPOTS_PER_FRAME))
@@ -129,9 +133,15 @@ def reconstruct_storm_frames(
 
         # Flatten to 2‑D grayscale
         if data.ndim == 3:
-            sel_dim = 0 if "c" not in img.data.dims else {
-                (d, idx) for d, idx in zip(img.data.dims, range(data.ndim)) if d == "c"
-            }.pop()[1]
+            sel_dim = (
+                0
+                if "c" not in img.data.dims
+                else {
+                    (d, idx)
+                    for d, idx in zip(img.data.dims, range(data.ndim))
+                    if d == "c"
+                }.pop()[1]
+            )
             data = data[sel_dim]
         data = np.asarray(data, dtype=np.float32)
 
@@ -154,13 +164,13 @@ def reconstruct_storm_frames(
         stage=stage,
     )
 
-    rgb_view = dict(
+    rgb_view = PartialRGBViewInput(
         cMin=0,
         cMax=1,
         contrastLimitMax=float(recon.max()),
         contrastLimitMin=float(recon.min()),
-        colorMap=ColorMap.MAGENTA,
-        baseColor=[0, 0, 0],
+        colorMap=ColorMap.VIRIDIS,
+        baseColor=(0, 0, 0),
     )
 
     return from_array_like(
@@ -171,36 +181,10 @@ def reconstruct_storm_frames(
     )
 
 
-
-def _run_simulation(n_frames: int = N_FRAMES, save: bool = True):
-    recon_sum = np.zeros(FRAME_SHAPE, dtype=np.uint32)
-    all_params = []
-
-    t0 = time.time()
-    for i in range(n_frames):
-        frame = _simulate_frame(FRAME_SHAPE, np.random.randint(*SPOTS_PER_FRAME))
-        render, params = _localize(frame, REL_THRESHOLD, ROI_SIZE, SIGMA_PSF)
-        recon_sum += render.astype(np.uint32)
-        if params is not None and params.size:
-            all_params.append(params)
-    dt = time.time() - t0
-    print(f"{n_frames} frames processed in {dt:.2f}s ({n_frames / dt:.1f} fps)")
-
-    if save:
-        outdir = Path("storm_sim_output")
-        outdir.mkdir(exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        tif.imwrite(outdir / f"reconstruction_{ts}.tif", recon_sum.astype(np.uint16))
-        if all_params:
-            np.save(outdir / f"localizations_{ts}.npy", np.vstack(all_params))
-        print(f"Results saved to {outdir.resolve()}")
-
-
-
 def main():
     print("Starting Arkitekt service …")
-    app.enter()
-    app.run()  # blocks
+    with easy("STORM_Reconstruction_Service") as app:
+        app.run()  # blocks
 
 
 if __name__ == "__main__":

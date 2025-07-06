@@ -1,48 +1,25 @@
-# Use an official Python runtime as a base image
-FROM python:3.12-slim
+FROM python:3.11-slim-bookworm
 
-# Set environment variables to prevent Python from generating .pyc files
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Copy uv binaries
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && apt-get clean \
+
+# Install git, build tools, and system dependencies (excluding Qt)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        python3.11-dev \
+        libssl-dev \
+        libffi-dev \
+        pkg-config \
+        cmake \
     && rm -rf /var/lib/apt/lists/*
 
-
-# Set the working directory
+# Copy project files and install dependencies via uv
+ADD . /app
 WORKDIR /app
-
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --upgrade setuptools
-RUN pip install "numpy==1.26.4"
-RUN pip install "ashlarUC2" --no-dependencies
-RUN pip install "tifffile"
-# Copy the application code into the container
-
-
-RUN pip install "scikit-image<=0.20"
-RUN pip install blessed
-RUN pip install scikit-learn
-RUN pip install matplotlib
-
-
-RUN pip install "arkitekt-next[all]==0.8.47"
-
-COPY .arkitekt_next /app/.arkitekt_next
-COPY api /app/api
-COPY * /app/
-
-
-
-RUN python app.py
-
-# Expose any ports the app runs on
-EXPOSE 8000
-# additional port for Arkitekt?
-
+# Set up uv-managed virtualenv in a known location and sync deps
+RUN uv venv /app/.venv && uv sync --locked 
+ENV PATH="/app/.venv/bin:$PATH"
 
